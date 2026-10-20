@@ -1,0 +1,39 @@
+name: Publish to PyPI
+
+# Runs when a GitHub release is published. Uploads with PyPI Trusted Publishing, so no
+# API token is stored in this repository: PyPI trusts this workflow, in the `pypi`
+# environment, through a short-lived OIDC token. The release tag must match the
+# version in cantivia/_version.py (v0.1.0 for 0.1.0).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cantivia/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the tag matches the package version
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' cantivia/_version.py)"
+          if [ -z "$version" ] || [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::release tag ${GITHUB_REF_NAME} does not match package version ${version}"
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv sync --locked --extra dev
+      - run: uv run pytest -q
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

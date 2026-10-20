@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=83.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cantivia"
+dynamic = ["version"]
+description = "Python client for the Cantivia API: fact-checking, media forensics and manuscript screening"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Cantivia Limited" }]
+keywords = ["cantivia", "fact-checking", "misinformation", "media forensics", "api", "sdk"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.28.0",
+    "pydantic>=2.7.0",
+]
+
+[project.urls]
+Homepage = "https://cantivia.com"
+Repository = "https://github.com/cantivia/cantivia-sdk-python"
+Issues = "https://github.com/cantivia/cantivia-sdk-python/issues"
+Changelog = "https://github.com/cantivia/cantivia-sdk-python/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.16.1",
+]
+
+[tool.setuptools.dynamic]
+# One place for the version: the package reports it at runtime and in its User-Agent.
+version = { attr = "cantivia._version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cantivia*"]
+
+[tool.setuptools.package-data]
+cantivia = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "BLE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

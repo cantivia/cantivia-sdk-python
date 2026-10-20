@@ -1,0 +1,2 @@
+# The tests run from a checkout of the repository, not from an installed package.
+prune tests
