@@ -37,7 +37,43 @@ AsyncCantiviaClient(...)                 # same arguments; http_client is an htt
 | `close()` / `await aclose()` | `None` | release the client's connections |
 | `health()` | `dict[str, Any]` | check that the API is up; needs no API key |
 
+`api_key` is required for every method but `health()`; create one on the Cantivia
+dashboard. Use the client as a context manager (`with`, or `async with` for
+`AsyncCantiviaClient`), or call `close()` when you are done, so its connections are
+released.
+
+Pass your own `httpx.Client` (an `httpx.AsyncClient` for the async client) as
+`http_client` to set a proxy or a custom transport; the options above still apply to
+every request. Each request sends `User-Agent: cantivia-python/<version>`.
+
+## Retries and timeouts
+
+The client retries only requests that provably never reached the service: a connection
+that could not be opened (refused, reset while connecting, DNS failure, connect
+timeout), `429 Too Many Requests` and `503 Service Unavailable`. Both statuses are
+refusals made before any work starts. Once a request has been sent it is never retried:
+not after a timeout, a dropped connection, any other 5xx or 4xx, or a stream that has
+started, because the work may already be under way and would run, and be billed, twice.
+
+It waits as long as the API's `Retry-After` header asks, up to 60 seconds, and otherwise
+backs off exponentially from 0.5 s to at most 8 s with jitter. The default is 2 retries;
+set `max_retries` on the client or on one call, and 0 turns retrying off.
+
+A request times out when it goes 600 s without data, by default, with 10 seconds to
+connect. A stream counts every event as data, so a long check that keeps streaming
+progress does not time out. Pass `timeout` as a number of seconds or an `httpx.Timeout`,
+on the client or on one call. A timeout raises `APITimeoutError` and is not retried.
+
+```python
+client = CantiviaClient(max_retries=0, timeout=120.0)
+client.screen_manuscript(title, abstract, max_retries=5, timeout=httpx.Timeout(900.0, connect=5.0))
+```
+
 ## Media forensics
+
+`verify_media` checks an image, audio clip or video for C2PA provenance and matches it
+against media your account has enrolled. The verdict is `synthetic` or `unknown`, never
+"real": `unknown` means nothing was found, not that the file is authentic.
 
 | method | returns |
 |---|---|
@@ -60,6 +96,11 @@ and `combined_p` (programmatic use only).
 `MediaForensicsChunk`, then `MediaDoneChunk`, with no text reading and no fact-check.
 
 ## Media catalogue
+
+Enrol media you hold the rights to, and later checks by any key on your account match
+copies of it. Only your account sees it. `draft_notice` drafts a takedown notice for a
+copy found online, for a person to review before anything is sent;
+`delete_catalogue_asset` erases an asset.
 
 | method | returns |
 |---|---|
@@ -96,6 +137,11 @@ and `combined_p` (programmatic use only).
 
 ## Titrate
 
+`score_post` gives an early warning on whether a social post's thread will grow large.
+It scores spread, not truth, and often declines to score: most posts get no replies, and
+a post under an hour old has not finished its observation window. Read
+`abstain_reason`.
+
 | method | returns |
 |---|---|
 | `score_post(post_url)` | `Titrate` |
@@ -112,6 +158,11 @@ and `combined_p` (programmatic use only).
 `"reddit"` is reserved. `detail` explains `abstain_reason` in words.
 
 ## Paper-mill screen
+
+`screen_manuscript` reads a manuscript's title and abstract and says whether an
+integrity reviewer should look at it. It scores writing style, not misconduct, so show
+the `caveats` with the decision. `unavailable` means the screen could not run, and
+`error` says why.
 
 | method | returns |
 |---|---|
@@ -148,6 +199,12 @@ The request, verdict and latency counters are approximate and scoped to the call
 `products` is exact billing state for the whole account.
 
 ## Stream chunks
+
+Long-running checks have a `*_stream` form that yields typed chunks as the work
+progresses. Streaming is the recommended way to run long work: progress arrives as it
+happens, rather than after one long wait. With `AsyncCantiviaClient`, iterate with
+`async for`. Dispatch on the chunk's class, for example
+`isinstance(chunk, MediaForensicsChunk)`; a failure arrives as an `ErrorChunk`.
 
 `StreamChunk` is a union discriminated by `type`. Media forensics and Titrate streams
 use these; fact-checking streams add the chunks listed under
@@ -187,22 +244,40 @@ those, so a newer API that adds an event never breaks an older release.
 | `ServiceUnavailableError` | 503 (a subclass of `InternalServerError`) |
 | `VerificationError` | a result stream carried an error event: `message`, `request_id` |
 
+`retry_after` is in seconds, set when the API sent `Retry-After`. `code` is the API's
+machine-readable reason, the field to branch on.
+
 `request_id` is the id the API gave the request, read from the `request-id` response
-header (or the error body's `request_id`), and None when the response had none. The
-string form of both errors ends with `(request id req_...)`. Quote it when you contact
-support.
+header (or the error body's `request_id`), and None when the response had none; an
+`ErrorChunk` from a stream carries it too. The string form of both errors ends with it:
+
+```
+429 rate_limited: Rate limit exceeded. Retry in 5s. (request id req_8f14e45fceea467f9a1b2c3d4e5f6a7b)
+```
+
+Quote the request id when you contact support: it lets us find everything that happened
+to that request.
 
 ## Constants
 
 `DEFAULT_BASE_URL`, `DEFAULT_TIMEOUT`, `DEFAULT_MAX_RETRIES`, `MAX_CLAIM_CHARS`,
 `MAX_IMAGE_B64_CHARS`, `MAX_POST_URL_CHARS`, `MAX_CATALOGUE_BATCH`, `MAX_BATCH_CLAIMS`,
-`MAX_BATCH_CLAIM_CHARS`, `VERDICT_LABELS`, `__version__`.
+`MAX_BATCH_CLAIM_CHARS`, `VERDICT_LABELS`,
+`__version__`.
 
 ## Fact-checking (coming soon)
 
 Fact-checking is not yet available on public plans, and calls to it are refused with
 402 `no_entitlement` until it launches. The methods are already in the SDK, so code
-written against them keeps working when it does.
+written against them keeps working when it does. A refused call raises
+`PaymentRequiredError` with `code` set to `no_entitlement`, or, on a stream, ends in an
+error chunk saying fact-checking is unavailable.
+
+Show people the verdict, the reasoning and the citations. Check `degraded` first: it
+means the check could not run and `unverifiable` was filled in, which is not a judgment
+about the claim, so try again rather than show it. A thorough fact-check can take
+minutes; the `*_stream` forms yield each stage as it happens, including the live
+reasoning text.
 
 ### Methods
 
@@ -227,6 +302,13 @@ written against them keeps working when it does.
 - `follow_up: str` - 1 to 4,000 characters. `prior_claims: list[str] | None` - up to 20
   earlier claims of the conversation, never their verdicts.
 
+`verify_article` splits the text into check-worthy claims, verifies each and returns an
+overall verdict for the document; a link in it is checked as a link, not as the page
+behind it. `verify_image` reads the text in a screenshot, meme or infographic and checks
+it as a document. `resolve` turns a conversational follow-up such as "what about last
+year?", which asserts nothing on its own, into a standalone claim, using the earlier
+claims (never their verdicts).
+
 `verify`, `verify_article` and `verify_image` raise `VerificationError` when the check
 reports an error, and `CantiviaError` when the stream ends without a result.
 
@@ -235,7 +317,7 @@ reports an error, and `CantiviaError` when the stream ends without a result.
 | field | type | notes |
 |---|---|---|
 | `claim` | `str` | the claim checked |
-| `verdict` | `Verdict \| str` | see the table in the README |
+| `verdict` | `Verdict \| str` | see [Verdicts](#verdicts) |
 | `reasoning` | `str` | |
 | `citations` | `list[Citation]` | `url`, `quote` |
 | `sources` | `list[str] \| None` | every evidence URL found, a superset of those cited |
@@ -307,3 +389,20 @@ These join the chunks under [Stream chunks](#stream-chunks) in a fact-checking s
 `BatchItem`: `idx`, `claim`, `status: Literal["pending", "done", "failed"] | str`, `verdict`,
 `reasoning`, `citations`, `degraded`, `processing_ms`, `error`, and `confidence`
 (programmatic use only).
+
+### Verdicts
+
+| verdict | meaning |
+|---|---|
+| `true` | every material element is affirmed by the evidence |
+| `mostly_true` | accurate in substance; a peripheral detail is off |
+| `partially_true` | some load-bearing elements hold, others do not |
+| `misleading` | technically accurate and still leaves a false impression |
+| `mostly_fake` | the core assertion fails; something incidental survives |
+| `fake` | the core assertion is contradicted by the evidence |
+| `unverifiable` | the evidence does not settle it, including claims not yet knowable |
+| `not_a_claim` | the input was not a checkable claim (a greeting, a question) |
+
+These are the verdicts today; treat any other value as unknown. `VERDICT_LABELS` maps
+each `Verdict` to a label for display, such as "Mostly true";
+`VERDICT_LABELS.get(verdict, verdict)` falls back to the raw value.
